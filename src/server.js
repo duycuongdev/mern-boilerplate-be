@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 import express from 'express'
 import exitHook from 'async-exit-hook'
 import { CONNECT_DB, CLOSE_DB } from '~/config/mongodb'
@@ -6,12 +5,15 @@ import { env } from '~/config/environment'
 import { APIs_V1 } from '~/routes/v1'
 import { errorHandlingMiddleware } from '~/middlewares/errorHandlingMiddleware'
 import { rateLimiterMiddleware } from '~/middlewares/rateLimiterMiddleware'
+import { CREATE_DB_INDEXES } from '~/config/indexes'
+import { logger } from '~/utils/logger'
 import cors from 'cors'
 import { corsOptions } from '~/config/cors'
 import cookieParser from 'cookie-parser'
 import socketIo from 'socket.io'
 import http from 'http'
-import { initSocketEvents } from '~/sockets/socketServer'
+import { initSocketEvents, setSocketServerInstance } from '~/sockets/socketServer'
+import { socketAuthMiddleware } from '~/sockets/socketAuthMiddleware'
 
 const START_SERVER = () => {
   const app = express()
@@ -61,6 +63,10 @@ const START_SERVER = () => {
 
   // Create Socket.IO server
   const io = new socketIo.Server(server, { cors: corsOptions })
+  // Register io instance for the service layer (e.g. kick users from rooms)
+  setSocketServerInstance(io)
+  // Mandatory JWT authentication at handshake - unauthenticated connections are rejected
+  io.use(socketAuthMiddleware)
   io.on('connection', (socket) => {
     initSocketEvents(socket, io)
   })
@@ -69,32 +75,35 @@ const START_SERVER = () => {
   if (env.BUILD_MODE === 'production') {
     const port = process.env.PORT || 8000
     server.listen(port, () => {
-      console.log(`🚀 Production server running on port: ${port}`)
+      logger.info(`🚀 Production server running on port: ${port}`)
     })
   } else {
     server.listen(env.LOCAL_DEV_APP_PORT, env.LOCAL_DEV_APP_HOST, () => {
-      console.log(`🛠️ Local Dev server running at http://${env.LOCAL_DEV_APP_HOST}:${env.LOCAL_DEV_APP_PORT}`)
+      logger.info(`🛠️ Local Dev server running at http://${env.LOCAL_DEV_APP_HOST}:${env.LOCAL_DEV_APP_PORT}`)
     })
   }
 
   // Graceful shutdown on process termination
   exitHook(() => {
-    console.log('🔄 Server is shutting down, closing database connections...')
+    logger.info('🔄 Server is shutting down, closing database connections...')
     CLOSE_DB()
-    console.log('✅ Database connections closed cleanly.')
+    logger.info('✅ Database connections closed cleanly.')
   })
 }
 
 // Connect to MongoDB before starting server
 (async () => {
   try {
-    console.log('⏳ Connecting to MongoDB...')
+    logger.info('⏳ Connecting to MongoDB...')
     await CONNECT_DB()
-    console.log('✅ Successfully connected to MongoDB!')
+    logger.info('✅ Successfully connected to MongoDB!')
+
+    // Ensure required indexes exist (idempotent, non-fatal on error)
+    await CREATE_DB_INDEXES()
+
     START_SERVER()
   } catch (error) {
-    console.error('❌ Failed to connect to MongoDB:', error)
+    logger.error('❌ Failed to connect to MongoDB:', error)
     process.exit(1)
   }
 })()
-

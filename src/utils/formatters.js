@@ -11,6 +11,7 @@ export const slugify = (val) => {
     .replace(/[^a-z0-9 -]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '') // remove leading/trailing hyphens (vd: 'dấu @#' -> 'dau-')
 }
 
 // Sanitize user object before returning to client (strip out sensitive fields like password hash)
